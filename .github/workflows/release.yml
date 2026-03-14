@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   create-tag:
@@ -34,3 +35,8 @@ jobs:
         run: |
           git tag "${{ steps.calver.outputs.tag }}"
           git push origin "${{ steps.calver.outputs.tag }}"
+
+      - name: Trigger Build and Deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run build-and-deploy.yml --field tag="${{ steps.calver.outputs.tag }}"
