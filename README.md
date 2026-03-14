@@ -15,7 +15,7 @@ ci-pipeline-demo/
 ├── .github/workflows/
 │   ├── ci.yml                # Feature/QA workflow (PR-triggered)
 │   ├── release.yml           # CalVer tag factory (manual dispatch)
-│   └── deploy.yml            # Release pipeline (reusable + manual dispatch)
+│   └── deploy.yml            # Release pipeline (tag-triggered + reusable + manual)
 ├── docker/
 │   └── base/
 │       └── Dockerfile        # Multi-stage: prod + dev targets (Alpine)
@@ -58,9 +58,9 @@ Available on `main` and `hotfix/*` branches. Zero inputs.
 2. Creates and pushes the git tag.
 3. Calls the Deploy workflow as a downstream job — all deploy jobs appear inside the Release run.
 
-### 3. Deploy (`deploy.yml`) — reusable + manual dispatch
+### 3. Deploy (`deploy.yml`) — tag-triggered + reusable + manual
 
-Called by Release as a reusable workflow (`workflow_call`). Also available as a standalone manual dispatch.
+Fires automatically on tag push matching `20*`. Also called by Release as a reusable workflow (`workflow_call`), and available as a standalone manual dispatch.
 
 | Job | Purpose | Dependencies |
 |-----|---------|--------------|
@@ -75,6 +75,7 @@ Push to branch with open PR  →  CI workflow (tests + quality)
 Push to main (PR merge)      →  Nothing (tests already passed)
 Push to hotfix/*              →  Nothing
 Click "Run workflow" button   →  Release workflow (creates tag → calls Deploy)
+Tag push matching 20*         →  Deploy workflow (automatic)
 Manual deploy.yml dispatch   →  Deploy workflow (standalone)
 ```
 
