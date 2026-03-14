@@ -35,7 +35,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push prod base image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/base
           target: prod
@@ -47,7 +47,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=base-prod
 
       - name: Build and push dev base image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/base
           target: dev
@@ -77,7 +77,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push app image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: app/Dockerfile
