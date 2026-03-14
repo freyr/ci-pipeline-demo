@@ -1,0 +1,217 @@
+# =============================================================================
+# Branch CI Pipeline
+# =============================================================================
+# Trigger:  Every push to a PR targeting main
+# Purpose:  Fast feedback - static analysis + tests using dev image
+# Images:   demo-base-dev:ci-$slug (if base changed) + demo-app-dev:ci-$slug
+# =============================================================================
+
+name: Branch CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ci-${{ github.head_ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Detect what changed and compute branch slug
+  # ---------------------------------------------------------------------------
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      base-changed: ${{ steps.filter.outputs.base }}
+      branch-slug: ${{ steps.slug.outputs.slug }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            base:
+              - 'docker/base/**'
+              - '.dockerignore'
+
+      - name: Compute branch slug
+        id: slug
+        run: |
+          REF="${{ github.head_ref }}"
+          SLUG=$(echo "$REF" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+          echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # 2. CI enforcement: verify BASE_PROD_TAG was bumped (only if base changed)
+  # ---------------------------------------------------------------------------
+  enforce-base-version:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.base-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check BASE_PROD_TAG was bumped
+        run: |
+          ARG_CHANGED=$(git diff origin/main...HEAD -- docker/app/Dockerfile | grep -c 'BASE_PROD_TAG' || true)
+          if [ "$ARG_CHANGED" -eq 0 ]; then
+            echo "::error::Base docker files changed but BASE_PROD_TAG in docker/app/Dockerfile was not bumped"
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check version not already published
+        run: |
+          VERSION=$(grep -oP 'ARG BASE_PROD_TAG=\K.*' docker/app/Dockerfile)
+          if docker manifest inspect ghcr.io/${{ github.repository }}/demo-base-prod:${VERSION} > /dev/null 2>&1; then
+            echo "::error::Base version ${VERSION} already exists in registry. Bump the sequence."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 3. Build base dev image (only if base changed + enforcement passed)
+  # ---------------------------------------------------------------------------
+  build-base-dev:
+    needs: [detect-changes, enforce-base-version]
+    if: >-
+      always()
+      && needs.detect-changes.outputs.base-changed == 'true'
+      && needs.enforce-base-version.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build and push demo-base-dev
+        uses: docker/build-push-action@v7
+        with:
+          context: docker/base
+          target: dev
+          push: true
+          tags: ghcr.io/${{ github.repository }}/demo-base-dev:ci-${{ needs.detect-changes.outputs.branch-slug }}
+          cache-from: type=gha,scope=base-dev
+          cache-to: type=gha,mode=max,scope=base-dev
+
+  # ---------------------------------------------------------------------------
+  # 4. Build app CI image (always - uses branch base or latest)
+  # ---------------------------------------------------------------------------
+  build-app-ci:
+    needs: [detect-changes, enforce-base-version, build-base-dev]
+    if: >-
+      always()
+      && !failure()
+      && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Determine base dev tag
+        id: base-tag
+        run: |
+          if [ "${{ needs.detect-changes.outputs.base-changed }}" == "true" ]; then
+            echo "tag=ci-${{ needs.detect-changes.outputs.branch-slug }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push demo-app-dev
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/app/Dockerfile
+          target: ci
+          push: true
+          tags: ghcr.io/${{ github.repository }}/demo-app-dev:ci-${{ needs.detect-changes.outputs.branch-slug }}
+          build-args: |
+            BASE_DEV_IMAGE=ghcr.io/${{ github.repository }}/demo-base-dev
+            BASE_DEV_TAG=${{ steps.base-tag.outputs.tag }}
+          cache-from: type=gha,scope=app-ci
+          cache-to: type=gha,mode=max,scope=app-ci
+
+      - name: Summary
+        run: |
+          echo "### CI image built" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | Tag | Base |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-----|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`demo-app-dev\` | \`ci-${{ needs.detect-changes.outputs.branch-slug }}\` | \`demo-base-dev:${{ steps.base-tag.outputs.tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 5. QA matrix - all jobs run in parallel using the CI image
+  # ---------------------------------------------------------------------------
+  phpunit:
+    needs: [detect-changes, build-app-ci]
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/demo-app-dev:ci-${{ needs.detect-changes.outputs.branch-slug }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: vendor/bin/phpunit
+
+  phpstan:
+    needs: [detect-changes, build-app-ci]
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/demo-app-dev:ci-${{ needs.detect-changes.outputs.branch-slug }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: vendor/bin/phpstan analyse
+
+  cs-fixer:
+    needs: [detect-changes, build-app-ci]
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/demo-app-dev:ci-${{ needs.detect-changes.outputs.branch-slug }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: vendor/bin/php-cs-fixer fix --dry-run --diff
+
+  deptrac:
+    needs: [detect-changes, build-app-ci]
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}/demo-app-dev:ci-${{ needs.detect-changes.outputs.branch-slug }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: vendor/bin/deptrac analyse

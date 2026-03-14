@@ -1,0 +1,7 @@
+.git
+.github
+vendor
+*.cache
+.idea
+.vscode
+.DS_Store

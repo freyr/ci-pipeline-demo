@@ -1,0 +1,72 @@
+# =============================================================================
+# Branch Image Cleanup
+# =============================================================================
+# Trigger:  PR closed (merged or abandoned)
+# Purpose:  Delete branch-scoped images from GHCR to prevent tag accumulation
+# Deletes:  demo-base-dev:ci-$slug, demo-base-prod:ci-$slug,
+#           demo-app-dev:ci-$slug, demo-app-prod:qa-$slug
+# =============================================================================
+
+name: Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute branch slug
+        id: slug
+        run: |
+          REF="${{ github.head_ref }}"
+          SLUG=$(echo "$REF" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+          echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
+
+      - name: Delete branch-scoped images
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SLUG="${{ steps.slug.outputs.slug }}"
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+
+          delete_version() {
+            local PACKAGE="$1"
+            local TAG="$2"
+
+            # List versions and find the one matching our tag
+            VERSION_ID=$(gh api \
+              "/users/${OWNER}/packages/container/${REPO}%2F${PACKAGE}/versions" \
+              --jq ".[] | select(.metadata.container.tags[] == \"${TAG}\") | .id" \
+              2>/dev/null || true)
+
+            if [ -n "$VERSION_ID" ]; then
+              gh api --method DELETE \
+                "/users/${OWNER}/packages/container/${REPO}%2F${PACKAGE}/versions/${VERSION_ID}" \
+                2>/dev/null || true
+              echo "Deleted ${PACKAGE}:${TAG} (version ${VERSION_ID})"
+            else
+              echo "Skipped ${PACKAGE}:${TAG} (not found)"
+            fi
+          }
+
+          # Delete all branch-scoped images
+          delete_version "demo-base-dev"  "ci-${SLUG}"
+          delete_version "demo-base-prod" "ci-${SLUG}"
+          delete_version "demo-app-dev"   "ci-${SLUG}"
+          delete_version "demo-app-prod"  "qa-${SLUG}"
+
+      - name: Summary
+        run: |
+          echo "### Cleaned up images for branch \`${{ github.head_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Attempted deletion of:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`demo-base-dev:ci-${{ steps.slug.outputs.slug }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`demo-base-prod:ci-${{ steps.slug.outputs.slug }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`demo-app-dev:ci-${{ steps.slug.outputs.slug }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`demo-app-prod:qa-${{ steps.slug.outputs.slug }}\`" >> "$GITHUB_STEP_SUMMARY"

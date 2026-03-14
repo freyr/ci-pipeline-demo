@@ -1,0 +1,192 @@
+# =============================================================================
+# Branch QA Pipeline (Label-Triggered)
+# =============================================================================
+# Trigger:  PR with `app-image` label (on label add + subsequent pushes)
+# Purpose:  Build prod image from branch code for QA testing
+# Images:   demo-base-prod:ci-$slug (if base changed) + demo-app-prod:qa-$slug
+# =============================================================================
+
+name: Branch QA
+
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled, synchronize]
+
+concurrency:
+  group: qa-${{ github.head_ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate: only run when `app-image` label is present
+  # ---------------------------------------------------------------------------
+  check-label:
+    if: contains(github.event.pull_request.labels.*.name, 'app-image')
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "app-image label present — proceeding with QA build"
+
+  # ---------------------------------------------------------------------------
+  # 1. Detect changes and compute slugs
+  # ---------------------------------------------------------------------------
+  detect-changes:
+    needs: check-label
+    runs-on: ubuntu-latest
+    outputs:
+      base-changed: ${{ steps.filter.outputs.base }}
+      branch-slug: ${{ steps.slug.outputs.slug }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            base:
+              - 'docker/base/**'
+              - '.dockerignore'
+
+      - name: Compute branch slug
+        id: slug
+        run: |
+          REF="${{ github.head_ref }}"
+          SLUG=$(echo "$REF" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+          echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # 2. Build base prod image (only if base changed — temporary branch tag)
+  # ---------------------------------------------------------------------------
+  build-base-prod:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.base-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build and push demo-base-prod (branch tag)
+        uses: docker/build-push-action@v7
+        with:
+          context: docker/base
+          target: prod
+          push: true
+          tags: ghcr.io/${{ github.repository }}/demo-base-prod:ci-${{ needs.detect-changes.outputs.branch-slug }}
+          cache-from: type=gha,scope=base-prod
+          cache-to: type=gha,mode=max,scope=base-prod
+
+  # ---------------------------------------------------------------------------
+  # 3. Build app prod image
+  # ---------------------------------------------------------------------------
+  build-app-prod:
+    needs: [detect-changes, build-base-prod]
+    if: >-
+      always()
+      && !failure()
+      && !cancelled()
+      && needs.detect-changes.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Determine base prod tag
+        id: base-tag
+        run: |
+          if [ "${{ needs.detect-changes.outputs.base-changed }}" == "true" ]; then
+            echo "tag=ci-${{ needs.detect-changes.outputs.branch-slug }}" >> "$GITHUB_OUTPUT"
+          else
+            VERSION=$(grep -oP 'ARG BASE_PROD_TAG=\K.*' docker/app/Dockerfile)
+            echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push demo-app-prod
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/app/Dockerfile
+          target: prod
+          push: true
+          tags: ghcr.io/${{ github.repository }}/demo-app-prod:qa-${{ needs.detect-changes.outputs.branch-slug }}
+          build-args: |
+            BASE_PROD_IMAGE=ghcr.io/${{ github.repository }}/demo-base-prod
+            BASE_PROD_TAG=${{ steps.base-tag.outputs.tag }}
+            APP_VERSION=qa-${{ needs.detect-changes.outputs.branch-slug }}
+          cache-from: type=gha,scope=app-qa
+          cache-to: type=gha,mode=max,scope=app-qa
+
+      - name: Summary
+        run: |
+          echo "### QA image built" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | Tag | Base |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-----|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`demo-app-prod\` | \`qa-${{ needs.detect-changes.outputs.branch-slug }}\` | \`demo-base-prod:${{ steps.base-tag.outputs.tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 4. Comment on PR with image tag
+  # ---------------------------------------------------------------------------
+  comment:
+    needs: [detect-changes, build-app-prod]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment image tag on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const slug = '${{ needs.detect-changes.outputs.branch-slug }}';
+            const image = `ghcr.io/${{ github.repository }}/demo-app-prod:qa-${slug}`;
+            const body = [
+              '### QA Image Ready',
+              '',
+              '```',
+              `docker pull ${image}`,
+              `docker run --rm ${image}`,
+              '```',
+              '',
+              `Image: \`demo-app-prod:qa-${slug}\``,
+            ].join('\n');
+
+            // Delete previous bot comments to avoid clutter
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const comment of comments.data) {
+              if (comment.body.startsWith('### QA Image Ready')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
