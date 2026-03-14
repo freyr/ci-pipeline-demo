@@ -5,7 +5,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: write
   packages: write
 
@@ -39,13 +38,6 @@ jobs:
         run: |
           git tag "${{ steps.calver.outputs.tag }}"
           git push origin "${{ steps.calver.outputs.tag }}"
-
-      - name: Rename workflow run
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }} \
-            --method PATCH --field "name=Release ${{ steps.calver.outputs.tag }}"
 
       - name: Summary
         run: |
