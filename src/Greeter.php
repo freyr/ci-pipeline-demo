@@ -10,4 +10,9 @@ final class Greeter
     {
         return sprintf('Hello, %s!', $name);
     }
+
+    public function farewell(string $name): string
+    {
+        return sprintf('Goodbye, %s!', $name);
+    }
 }

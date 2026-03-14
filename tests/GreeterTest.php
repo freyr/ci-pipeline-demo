@@ -19,4 +19,12 @@ final class GreeterTest extends TestCase
 
         self::assertSame('Hello, World!', $result);
     }
+
+    #[Test]
+    public function itSaysFarewell(): void
+    {
+        $greeter = new Greeter();
+
+        self::assertSame('Goodbye, World!', $greeter->farewell('World'));
+    }
 }
