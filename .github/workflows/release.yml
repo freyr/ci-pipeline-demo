@@ -7,7 +7,7 @@
 # Images:   demo-base-prod:$BASE_PROD_TAG (if missing) + demo-app-prod:$tag + :latest
 # =============================================================================
 
-name: Release
+name: Build Release
 run-name: "Release ${{ github.ref_name }}"
 
 on:
@@ -38,6 +38,9 @@ jobs:
   build:
     needs: validate
     runs-on: ubuntu-latest
+    outputs:
+      base-version: ${{ steps.base.outputs.version }}
+      base-existed: ${{ steps.base-check.outputs.exists }}
     steps:
       - uses: actions/checkout@v6
 
@@ -96,14 +99,6 @@ jobs:
           cache-from: type=gha,scope=app-release
           cache-to: type=gha,mode=max,scope=app-release
 
-      - name: Summary
-        run: |
-          echo "### Production image" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Image | Tags | Base version |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|------|-------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| \`demo-app-prod\` | \`${{ github.ref_name }}\`, \`latest\` | \`${{ steps.base.outputs.version }}\` |" >> "$GITHUB_STEP_SUMMARY"
-
   # ---------------------------------------------------------------------------
   # 3. Create GitHub release with auto-generated notes
   # ---------------------------------------------------------------------------
@@ -120,8 +115,50 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "${{ github.ref_name }}" --generate-notes
 
-      - name: Summary
+  # ---------------------------------------------------------------------------
+  # 4. Release Summary
+  # ---------------------------------------------------------------------------
+  release-summary:
+    name: Release Summary
+    if: always()
+    needs: [validate, build, release-notes]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pipeline overview
         run: |
-          echo "### Release published" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Release: \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "[${{ github.ref_name }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Tag** | \`${{ github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Base version** | \`${{ needs.build.outputs.base-version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- Images ---
+          echo "### Images" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | Tags | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ needs.build.outputs.base-existed }}" == "true" ]; then
+            echo "| \`demo-base-prod\` | \`${{ needs.build.outputs.base-version }}\` (reused) | ⏭️ already in registry |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            BUILD_STATUS="${{ needs.build.result }}"
+            if [ "$BUILD_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+            echo "| \`demo-base-prod\` | \`${{ needs.build.outputs.base-version }}\` (safety net) | ${ICON} built |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          BUILD_STATUS="${{ needs.build.result }}"
+          if [ "$BUILD_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+          echo "| \`demo-app-prod\` | \`${{ github.ref_name }}\`, \`latest\` | ${ICON} ${BUILD_STATUS} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- Release ---
+          NOTES_STATUS="${{ needs.release-notes.result }}"
+          if [ "$NOTES_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+          echo "### GitHub Release: ${ICON} ${NOTES_STATUS}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$NOTES_STATUS" == "success" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "[${{ github.ref_name }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }})" >> "$GITHUB_STEP_SUMMARY"
+          fi

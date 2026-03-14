@@ -6,7 +6,8 @@
 # Images:   demo-base-dev:ci-$slug (if base changed) + demo-app-dev:ci-$slug
 # =============================================================================
 
-name: Branch CI
+name: CI Pipeline
+run-name: "CI: ${{ github.head_ref }}"
 
 on:
   pull_request:
@@ -48,6 +49,16 @@ jobs:
           REF="${{ github.head_ref }}"
           SLUG=$(echo "$REF" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
           echo "slug=${SLUG}" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "### Change detection" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Branch** | \`${{ github.head_ref }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Slug** | \`${{ steps.slug.outputs.slug }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Base changed** | \`${{ steps.filter.outputs.base }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # 2. CI enforcement: verify BASE_PROD_TAG was bumped (only if base changed)
@@ -116,6 +127,12 @@ jobs:
           cache-from: type=gha,scope=base-dev
           cache-to: type=gha,mode=max,scope=base-dev
 
+      - name: Summary
+        run: |
+          echo "### Base dev image rebuilt" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`demo-base-dev:ci-${{ needs.detect-changes.outputs.branch-slug }}\`" >> "$GITHUB_STEP_SUMMARY"
+
   # ---------------------------------------------------------------------------
   # 4. Build app CI image (always - uses branch base or latest)
   # ---------------------------------------------------------------------------
@@ -180,6 +197,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: /app
     steps:
       - run: vendor/bin/phpunit
 
@@ -191,6 +211,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: /app
     steps:
       - run: vendor/bin/phpstan analyse
 
@@ -202,6 +225,9 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: /app
     steps:
       - run: vendor/bin/php-cs-fixer fix --dry-run --diff
 
@@ -213,5 +239,73 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        working-directory: /app
     steps:
       - run: vendor/bin/deptrac analyse
+
+  # ---------------------------------------------------------------------------
+  # 6. Pipeline summary
+  # ---------------------------------------------------------------------------
+  ci-summary:
+    name: CI Summary
+    if: always()
+    needs: [detect-changes, enforce-base-version, build-base-dev, build-app-ci, phpunit, phpstan, cs-fixer, deptrac]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pipeline overview
+        run: |
+          SLUG="${{ needs.detect-changes.outputs.branch-slug }}"
+          BASE_CHANGED="${{ needs.detect-changes.outputs.base-changed }}"
+
+          echo "## Branch CI: \`${{ github.head_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- Images ---
+          echo "### Images" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | Tag | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$BASE_CHANGED" == "true" ]; then
+            BASE_STATUS="${{ needs.build-base-dev.result }}"
+            if [ "$BASE_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+            echo "| \`demo-base-dev\` | \`ci-${SLUG}\` | ${ICON} ${BASE_STATUS} |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| \`demo-base-dev\` | \`latest\` (reused) | ⏭️ no base changes |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          APP_STATUS="${{ needs.build-app-ci.result }}"
+          if [ "$APP_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+          echo "| \`demo-app-dev\` | \`ci-${SLUG}\` | ${ICON} ${APP_STATUS} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- Enforcement ---
+          if [ "$BASE_CHANGED" == "true" ]; then
+            echo "### Base version enforcement" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            ENFORCE="${{ needs.enforce-base-version.result }}"
+            if [ "$ENFORCE" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+            echo "${ICON} BASE_PROD_TAG bump check: **${ENFORCE}**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # --- Quality ---
+          echo "### Quality checks" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          for JOB in phpunit phpstan cs-fixer deptrac; do
+            case "$JOB" in
+              phpunit)  RESULT="${{ needs.phpunit.result }}" ;;
+              phpstan)  RESULT="${{ needs.phpstan.result }}" ;;
+              cs-fixer) RESULT="${{ needs.cs-fixer.result }}" ;;
+              deptrac)  RESULT="${{ needs.deptrac.result }}" ;;
+            esac
+            if [ "$RESULT" == "success" ]; then ICON="✅";
+            elif [ "$RESULT" == "skipped" ]; then ICON="⏭️";
+            else ICON="❌"; fi
+            echo "| ${JOB} | ${ICON} ${RESULT} |" >> "$GITHUB_STEP_SUMMARY"
+          done

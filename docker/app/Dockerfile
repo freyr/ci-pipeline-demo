@@ -8,7 +8,7 @@
 ARG BASE_DEV_IMAGE=ghcr.io/freyr/ci-pipeline-demo/demo-base-dev
 ARG BASE_PROD_IMAGE=ghcr.io/freyr/ci-pipeline-demo/demo-base-prod
 ARG BASE_DEV_TAG=latest
-ARG BASE_PROD_TAG=8.4.1
+ARG BASE_PROD_TAG=8.4.2
 
 # -- ci target ----------------------------------------------------------------
 # Used for: static analysis, unit tests, functional tests

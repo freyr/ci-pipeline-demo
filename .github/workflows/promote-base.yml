@@ -6,7 +6,8 @@
 # Images:   demo-base-dev:latest + demo-base-prod:$BASE_PROD_TAG (immutable)
 # =============================================================================
 
-name: Promote Base
+name: Trunk Pipeline
+run-name: "Trunk: ${{ github.sha }}"
 
 on:
   push:
@@ -67,7 +68,14 @@ jobs:
 
       - name: Summary
         run: |
-          echo "### Base images promoted" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Base Image Promotion" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Trigger** | merge to \`main\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Images pushed" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Image | Tag | Mutable? |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-------|-----|----------|" >> "$GITHUB_STEP_SUMMARY"

@@ -6,7 +6,8 @@
 # Images:   demo-base-prod:ci-$slug (if base changed) + demo-app-prod:qa-$slug
 # =============================================================================
 
-name: Branch QA
+name: QA Pipeline
+run-name: "QA: ${{ github.head_ref }}"
 
 on:
   pull_request:
@@ -99,6 +100,8 @@ jobs:
       && !cancelled()
       && needs.detect-changes.result == 'success'
     runs-on: ubuntu-latest
+    outputs:
+      base-tag: ${{ steps.base-tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
 
@@ -135,14 +138,6 @@ jobs:
             APP_VERSION=qa-${{ needs.detect-changes.outputs.branch-slug }}
           cache-from: type=gha,scope=app-qa
           cache-to: type=gha,mode=max,scope=app-qa
-
-      - name: Summary
-        run: |
-          echo "### QA image built" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Image | Tag | Base |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|-----|------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| \`demo-app-prod\` | \`qa-${{ needs.detect-changes.outputs.branch-slug }}\` | \`demo-base-prod:${{ steps.base-tag.outputs.tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # 4. Comment on PR with image tag
@@ -190,3 +185,44 @@ jobs:
               issue_number: context.issue.number,
               body: body,
             });
+
+  # ---------------------------------------------------------------------------
+  # 5. QA Summary
+  # ---------------------------------------------------------------------------
+  qa-summary:
+    name: QA Summary
+    if: always()
+    needs: [detect-changes, build-base-prod, build-app-prod, comment]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pipeline overview
+        run: |
+          SLUG="${{ needs.detect-changes.outputs.branch-slug }}"
+          BASE_CHANGED="${{ needs.detect-changes.outputs.base-changed }}"
+
+          echo "## Branch QA: \`${{ github.head_ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- Images ---
+          echo "### Images" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | Tag | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$BASE_CHANGED" == "true" ]; then
+            BASE_STATUS="${{ needs.build-base-prod.result }}"
+            if [ "$BASE_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+            echo "| \`demo-base-prod\` | \`ci-${SLUG}\` | ${ICON} ${BASE_STATUS} |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| \`demo-base-prod\` | \`${{ needs.build-app-prod.outputs.base-tag }}\` (reused) | ⏭️ no base changes |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          APP_STATUS="${{ needs.build-app-prod.result }}"
+          if [ "$APP_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+          echo "| \`demo-app-prod\` | \`qa-${SLUG}\` | ${ICON} ${APP_STATUS} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # --- PR comment ---
+          COMMENT_STATUS="${{ needs.comment.result }}"
+          if [ "$COMMENT_STATUS" == "success" ]; then ICON="✅"; else ICON="❌"; fi
+          echo "### PR comment: ${ICON} ${COMMENT_STATUS}" >> "$GITHUB_STEP_SUMMARY"
