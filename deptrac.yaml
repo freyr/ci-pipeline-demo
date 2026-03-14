@@ -1,0 +1,19 @@
+deptrac:
+  paths:
+    - src/
+
+  layers:
+    - name: Domain
+      collectors:
+        - type: classNameRegex
+          value: '#^Demo\\\\Pipeline\\\\Greeter$#'
+
+    - name: Application
+      collectors:
+        - type: classNameRegex
+          value: '#^Demo\\\\Pipeline\\\\Runner$#'
+
+  ruleset:
+    Domain: []
+    Application:
+      - Domain

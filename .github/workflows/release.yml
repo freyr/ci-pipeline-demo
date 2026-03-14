@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hotfix/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute CalVer tag
+        id: calver
+        run: |
+          TODAY=$(date -u +%Y.%m.%d)
+          # Find the highest BUILD number for today's date
+          LAST_BUILD=$(git tag --list "${TODAY}.*" --sort=-v:refname | head -n1 | awk -F. '{print $NF}')
+          if [ -z "$LAST_BUILD" ]; then
+            BUILD=1
+          else
+            BUILD=$((LAST_BUILD + 1))
+          fi
+          TAG="${TODAY}.${BUILD}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: ${TAG}"
+
+      - name: Create and push tag
+        run: |
+          git tag "${{ steps.calver.outputs.tag }}"
+          git push origin "${{ steps.calver.outputs.tag }}"
