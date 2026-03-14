@@ -8,18 +8,18 @@ Key design principles:
 - **Separate CI and QA images** — dev image for tests, prod image for QA/release
 - **Base image versioning** — immutable `X.Y.Z` tags, single source of truth in app Dockerfile
 - **Label-triggered QA** — `app-image` label triggers prod image build for e2e testing
-- **CalVer releases** — `vYYYY-MM-DD.$seq` tags, zero-input release workflow
+- **Manual releases** — developer creates + pushes a git tag, then triggers Build Release workflow on it
 
 ## Repository Structure
 
 ```
 ci-pipeline-demo/
 ├── .github/workflows/
-│   ├── ci-branch.yml        # Branch CI (PR-triggered: tests + static analysis)
-│   ├── qa-branch.yml        # Branch QA (label-triggered: prod image build)
-│   ├── promote-base.yml     # Base promotion (post-merge to main)
-│   ├── release.yml          # Release pipeline (CalVer tag + prod image + GHCR)
-│   └── cleanup.yml          # Branch image cleanup (PR close)
+│   ├── ci-branch.yml        # CI Pipeline (PR-triggered: tests + static analysis)
+│   ├── qa-branch.yml        # QA Pipeline (label-triggered: prod image build)
+│   ├── promote-base.yml     # Trunk Pipeline (post-merge base promotion)
+│   ├── release.yml          # Build Release (manual: tag + workflow dispatch)
+│   └── cleanup.yml          # Cleanup (PR close: delete branch images)
 ├── docker/
 │   ├── base/
 │   │   └── Dockerfile       # Base image: prod target + dev inherits prod
@@ -51,9 +51,9 @@ feature branch ──→ CI pipeline (auto) ──→ QA pipeline (label) ──
 
 ## Workflows
 
-### 1. Branch CI (`ci-branch.yml`)
+### 1. CI Pipeline (`ci-branch.yml`)
 
-Fires on every PR push targeting `main`. Fast feedback loop.
+Fires on every PR push targeting `main`. Fast feedback loop. Run name: `CI: $branch`.
 
 | Job | Purpose | Condition |
 |-----|---------|-----------|
@@ -65,12 +65,13 @@ Fires on every PR push targeting `main`. Fast feedback loop.
 | `phpstan` | Static analysis | After CI image built |
 | `cs-fixer` | Code style check | After CI image built |
 | `deptrac` | Architecture layer check | After CI image built |
+| `ci-summary` | Overview: branch, images built/reused, enforcement, quality results | Always (final) |
 
-Test jobs run **in parallel** inside the CI image container — no checkout or `composer install` needed.
+Test jobs run **in parallel** inside the CI image container (`working-directory: /app`) — no checkout or `composer install` needed.
 
-### 2. Branch QA (`qa-branch.yml`)
+### 2. QA Pipeline (`qa-branch.yml`)
 
-Fires when `app-image` label is present on a PR + on subsequent pushes.
+Fires when `app-image` label is present on a PR + on subsequent pushes. Run name: `QA: $branch`.
 
 | Job | Purpose | Condition |
 |-----|---------|-----------|
@@ -79,23 +80,25 @@ Fires when `app-image` label is present on a PR + on subsequent pushes.
 | `build-base-prod` | Build `demo-base-prod:ci-$slug` (temporary tag) | Only if base changed |
 | `build-app-prod` | Build `demo-app-prod:qa-$slug` | Always |
 | `comment` | Post image tag as PR comment | After build |
+| `qa-summary` | Overview: branch, images built/reused, PR comment status | Always (final) |
 
-### 3. Base Promotion (`promote-base.yml`)
+### 3. Trunk Pipeline (`promote-base.yml`)
 
-Fires on push to `main` when `docker/base/**` changed. Builds permanent base images:
+Fires on push to `main` when `docker/base/**` changed. Run name: `Trunk: $sha`. Builds permanent base images:
 
 - `demo-base-dev:latest` — default for other branches' CI pipelines
 - `demo-base-prod:X.Y.Z` — immutable version, used by QA/release pipelines
 
-### 4. Release (`release.yml`)
+### 4. Build Release (`release.yml`)
 
-Manual `workflow_dispatch` — select the tag in the "Use workflow from" dropdown. The developer creates and pushes a git tag first, then runs this workflow on it.
+Manual `workflow_dispatch` — select the tag in the "Use workflow from" dropdown. Run name: `Release $tag`. The developer creates and pushes a git tag first, then runs this workflow on it.
 
 | Job | Purpose |
 |-----|---------|
 | `validate` | Verify the workflow is running on a tag (not a branch) |
 | `build` | Parse `BASE_PROD_TAG`, check base exists, build `demo-app-prod:$tag` + `:latest` |
 | `release-notes` | `gh release create` with auto-generated notes |
+| `release-summary` | Overview: tag, commit, base version, images, release link |
 
 ### 5. Cleanup (`cleanup.yml`)
 
@@ -108,12 +111,12 @@ Fires on PR close. Deletes branch-scoped images from GHCR:
 ### Trigger Map
 
 ```
-PR push to main               →  ci-branch.yml (tests + static analysis)
-PR with `app-image` label     →  qa-branch.yml (prod image for QA)
-Merge to main (base changed)  →  promote-base.yml (base dev:latest + base prod:X.Y.Z)
+PR push to main               →  CI Pipeline (tests + static analysis)
+PR with `app-image` label     →  QA Pipeline (prod image for QA)
+Merge to main (base changed)  →  Trunk Pipeline (base dev:latest + base prod:X.Y.Z)
 Manual: git tag + git push     →  (nothing yet — tag exists in repo)
-Manual: Run workflow on tag    →  release.yml (validate ref is tag → app prod image → release notes)
-PR closed                      →  cleanup.yml (delete branch-scoped images)
+Manual: Run workflow on tag    →  Build Release (validate tag → app prod image → release notes)
+PR closed                      →  Cleanup (delete branch-scoped images)
 ```
 
 ## Docker Images
@@ -122,10 +125,10 @@ PR closed                      →  cleanup.yml (delete branch-scoped images)
 
 | Image | Dockerfile target | Base image | Tag format | Built by |
 |-------|-------------------|------------|------------|----------|
-| `demo-base-prod` | `prod` | — | `X.Y.Z` (immutable) | promote-base / release (safety net) |
-| `demo-base-dev` | `dev` (inherits prod) | — | `latest` / `ci-$slug` | promote-base / ci-branch |
-| `demo-app-dev` | `ci` | `demo-base-dev` | `ci-$slug` | ci-branch |
-| `demo-app-prod` | `prod` | `demo-base-prod` | `qa-$slug` / `vYYYY-MM-DD.$seq` / `latest` | qa-branch / release |
+| `demo-base-prod` | `prod` | — | `X.Y.Z` (immutable) | Trunk Pipeline / Build Release (safety net) |
+| `demo-base-dev` | `dev` (inherits prod) | — | `latest` / `ci-$slug` | Trunk Pipeline / CI Pipeline |
+| `demo-app-dev` | `ci` | `demo-base-dev` | `ci-$slug` | CI Pipeline |
+| `demo-app-prod` | `prod` | `demo-base-prod` | `qa-$slug` / `$tag` / `latest` | QA Pipeline / Build Release |
 
 ### GHCR Paths
 
@@ -146,8 +149,8 @@ PR closed                      →  cleanup.yml (delete branch-scoped images)
 | base prod | Branch QA | `ci-$slug` | Yes | Deleted on PR close |
 | app dev | Branch CI | `ci-$slug` | Yes | Deleted on PR close |
 | app prod | Branch QA | `qa-$slug` | Yes | Deleted on PR close |
-| app prod | Release | `vYYYY-MM-DD.$seq` | No (immutable) | Keep last N |
-| app prod | Release | `latest` | Yes | Always current |
+| app prod | Build Release | `$tag` (user-chosen) | No (immutable) | Keep last N |
+| app prod | Build Release | `latest` | Yes | Always current |
 
 ## Base Image Versioning
 

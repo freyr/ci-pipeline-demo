@@ -65,7 +65,7 @@ No Docker file changes — just application code. This is the most common flow.
    gh pr create --title "Add farewell method" --body "Demonstrates normal feature flow."
    ```
 
-5. **Observe CI (`ci-branch.yml`):**
+5. **Observe CI Pipeline (`ci-branch.yml`):**
 
    ```bash
    gh run list --limit 1
@@ -85,7 +85,7 @@ No Docker file changes — just application code. This is the most common flow.
    gh pr edit --add-label app-image
    ```
 
-7. **Observe QA (`qa-branch.yml`):**
+7. **Observe QA Pipeline (`qa-branch.yml`):**
 
    - `build-base-prod` → **skipped** (no base changes)
    - `build-app-prod` → builds `demo-app-prod:qa-feat-add-farewell`
@@ -103,7 +103,7 @@ No Docker file changes — just application code. This is the most common flow.
 - [ ] `phpunit`, `phpstan`, `cs-fixer`, `deptrac` ran in parallel
 - [ ] QA image was built only after `app-image` label was applied
 - [ ] PR comment shows the QA image tag
-- [ ] `promote-base.yml` did **not** run after merge (no base changes)
+- [ ] Trunk Pipeline did **not** run after merge (no base changes)
 - [ ] Cleanup deleted branch-scoped images
 
 ---
@@ -147,7 +147,7 @@ Changes to `docker/app/Dockerfile` (not the base). The pipeline is identical to 
 
 5. **Apply `app-image` label → observe QA:** Prod image built with the new Dockerfile (includes health check).
 
-6. **Merge and observe:** No `promote-base.yml` run (no base changes).
+6. **Merge and observe:** Trunk Pipeline does not run (no base changes).
 
 ### What to verify
 
@@ -204,7 +204,7 @@ Changes to `docker/base/**` trigger base image rebuilds and CI enforcement.
      --body "Demonstrates base Dockerfile change flow with version enforcement."
    ```
 
-6. **Observe CI (`ci-branch.yml`):**
+6. **Observe CI Pipeline (`ci-branch.yml`):**
 
    - `detect-changes` → `base-changed: true`
    - `enforce-base-version` → **runs**: checks `BASE_PROD_TAG` was bumped + version `8.4.2` doesn't exist in GHCR
@@ -212,14 +212,14 @@ Changes to `docker/base/**` trigger base image rebuilds and CI enforcement.
    - `build-app-ci` → builds `demo-app-dev:ci-feat-add-curl-to-base` using the new base
    - Tests run against the updated base
 
-7. **Apply `app-image` label → observe QA (`qa-branch.yml`):**
+7. **Apply `app-image` label → observe QA Pipeline (`qa-branch.yml`):**
 
    - `build-base-prod` → builds `demo-base-prod:ci-feat-add-curl-to-base` (temporary branch tag)
    - `build-app-prod` → builds `demo-app-prod:qa-feat-add-curl-to-base` using the temp base
 
 8. **Merge the PR.**
 
-9. **Observe base promotion (`promote-base.yml`):**
+9. **Observe Trunk Pipeline (`promote-base.yml`):**
 
    ```bash
    gh run list --workflow=promote-base.yml --limit 1
@@ -260,7 +260,7 @@ The `enforce-base-version` job will fail with:
 - [ ] `enforce-base-version` ran and passed (version bumped correctly)
 - [ ] 2 base images built in CI (dev) and QA (prod) with branch-scoped tags
 - [ ] Tests ran against the **new** base image, not stale `:latest`
-- [ ] After merge, `promote-base.yml` built `demo-base-dev:latest` + `demo-base-prod:8.4.2`
+- [ ] After merge, Trunk Pipeline built `demo-base-dev:latest` + `demo-base-prod:8.4.2`
 - [ ] `8.4.2` is immutable — it will never be overwritten
 - [ ] Cleanup deleted 4 branch-scoped images
 - [ ] New PRs (without base changes) now use the updated `:latest` base
@@ -286,12 +286,12 @@ One or more features merged, none changed the base. The base version is the same
 3. **Trigger the release workflow on the tag:**
 
    ```bash
-   # Via GitHub Actions UI: Actions → Release → Run workflow → select "v2026-03-14.1" from dropdown
+   # Via GitHub Actions UI: Actions → Build Release → Run workflow → select "v2026-03-14.1" from dropdown
    # Or via CLI:
    gh workflow run release.yml --ref v2026-03-14.1
    ```
 
-4. **Observe the release pipeline (`release.yml`):**
+4. **Observe Build Release (`release.yml`):**
 
    ```bash
    gh run list --workflow=release.yml --limit 1
@@ -326,7 +326,7 @@ One or more features merged, none changed the base. The base version is the same
 
 ### What to verify
 
-- [ ] `validate` confirmed the tag exists
+- [ ] `validate` confirmed ref is a tag
 - [ ] Base build was **skipped** (already exists)
 - [ ] `demo-app-prod` pushed with version tag + `:latest`
 - [ ] GitHub release created with notes
@@ -388,11 +388,11 @@ The release pipeline behaves **identically** in Scenarios 4 and 5. It always:
 3. Skips building it if it does
 4. Builds the app prod image on top
 
-The difference is only in what's inside the base image. The `promote-base.yml` workflow (triggered on merge to main) is what actually builds new base versions — the release pipeline just consumes them.
+The difference is only in what's inside the base image. The Trunk Pipeline (triggered on merge to main) is what actually builds new base versions — the Build Release pipeline just consumes them.
 
 ### What to verify
 
-- [ ] Release pipeline skipped base build (already built by promote-base)
+- [ ] Build Release skipped base build (already built by Trunk Pipeline)
 - [ ] App image `com.demo.base.version` label shows `8.4.2` (new base)
 - [ ] Previous release still shows `8.4.1` (old base, immutable)
 - [ ] Pipeline steps were identical to Scenario 4
@@ -401,8 +401,8 @@ The difference is only in what's inside the base image. The `promote-base.yml` w
 
 ## Summary: What Runs Where
 
-| Scenario | ci-branch | qa-branch | promote-base | release | cleanup |
-|----------|:---------:|:---------:|:------------:|:-------:|:-------:|
+| Scenario | CI Pipeline | QA Pipeline | Trunk Pipeline | Build Release | Cleanup |
+|----------|:-----------:|:-----------:|:--------------:|:-------------:|:-------:|
 | 1. App code only | 1 image | 1 image | — | — | 2 deleted |
 | 2. App Dockerfile | 1 image | 1 image | — | — | 2 deleted |
 | 3. Base Dockerfile | 2 images | 2 images | 2 images | — | 4 deleted |
