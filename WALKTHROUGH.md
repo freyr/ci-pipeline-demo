@@ -69,7 +69,7 @@ A developer adds a feature, opens a PR, and releases it.
    gh workflow run release.yml --ref main
    ```
 
-7. **Observe the release pipeline:** The CalVer tag (e.g., `2026.03.14.1`) triggers `Build and Deploy`. Watch the three jobs: `build-base-images`, `build-app-image`, and `release-notes`. A GitHub release appears with auto-generated notes.
+7. **Observe the release pipeline:** The Release run shows `create-tag` followed by the Deploy jobs (`build-base-images`, `build-app-image`, `release-notes`) — all in one unified view. A GitHub release appears with auto-generated notes.
 
 ### What to verify
 

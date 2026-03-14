@@ -5,12 +5,14 @@ on:
 
 permissions:
   contents: write
-  actions: write
+  packages: write
 
 jobs:
   create-tag:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hotfix/')
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.calver.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,7 +38,11 @@ jobs:
           git tag "${{ steps.calver.outputs.tag }}"
           git push origin "${{ steps.calver.outputs.tag }}"
 
-      - name: Trigger Build and Deploy
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run build-and-deploy.yml --field tag="${{ steps.calver.outputs.tag }}"
+  deploy:
+    needs: create-tag
+    uses: ./.github/workflows/deploy.yml
+    with:
+      tag: ${{ needs.create-tag.outputs.tag }}
+    permissions:
+      contents: write
+      packages: write
